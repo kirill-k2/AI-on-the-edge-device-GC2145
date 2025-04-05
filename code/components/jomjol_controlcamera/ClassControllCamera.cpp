@@ -103,6 +103,37 @@ static camera_config_t camera_config = {
     .fb_location = CAMERA_FB_IN_PSRAM, /*!< The location where the frame buffer will be allocated */
     .grab_mode = CAMERA_GRAB_LATEST,   // only from new esp32cam version
 };
+static camera_config_t camera_config_565 = {
+    .pin_pwdn = CAM_PIN_PWDN,
+    .pin_reset = CAM_PIN_RESET,
+    .pin_xclk = CAM_PIN_XCLK,
+    .pin_sscb_sda = CAM_PIN_SIOD,
+    .pin_sscb_scl = CAM_PIN_SIOC,
+
+    .pin_d7 = CAM_PIN_D7,
+    .pin_d6 = CAM_PIN_D6,
+    .pin_d5 = CAM_PIN_D5,
+    .pin_d4 = CAM_PIN_D4,
+    .pin_d3 = CAM_PIN_D3,
+    .pin_d2 = CAM_PIN_D2,
+    .pin_d1 = CAM_PIN_D1,
+    .pin_d0 = CAM_PIN_D0,
+    .pin_vsync = CAM_PIN_VSYNC,
+    .pin_href = CAM_PIN_HREF,
+    .pin_pclk = CAM_PIN_PCLK,
+
+    .xclk_freq_hz = (xclk * 1000000),
+    .ledc_timer = LEDC_TIMER_0,     // LEDC timer to be used for generating XCLK
+    .ledc_channel = LEDC_CHANNEL_0, // LEDC channel to be used for generating XCLK
+
+    .pixel_format = PIXFORMAT_RGB565, // YUV422,GRAYSCALE,RGB565,JPEG
+    // .frame_size = FRAMESIZE_VGA,    // QQVGA-UXGA Do not use sizes above QVGA when not JPEG
+    .frame_size = FRAMESIZE_QVGA,    //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
+    .jpeg_quality = 12,                 // 0-63 lower number means higher quality
+    .fb_count = 1,                     // if more than one, i2s runs in continuous mode. Use only with JPEG
+    .fb_location = CAMERA_FB_IN_PSRAM, /*!< The location where the frame buffer will be allocated */
+    .grab_mode = CAMERA_GRAB_LATEST,   // only from new esp32cam version
+};
 
 typedef struct
 {
@@ -139,8 +170,16 @@ esp_err_t CCamera::InitCam(void)
 
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "Camera Init Failed");
-        return err;
+        ESP_LOGE(TAG, "Camera Init Failed with JPEG, trying RGB565");
+
+        err = esp_camera_init(&camera_config_565);
+        vTaskDelay(cam_xDelay);
+
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Camera Init Failed with RGB565; ABORT");
+            return err;
+        }
     }
 
     CCstatus.CameraInitSuccessful = true;
@@ -164,8 +203,11 @@ esp_err_t CCamera::InitCam(void)
         case OV5640_PID:
             ESP_LOGI(TAG, "OV5640 camera module detected");
             break;
+        case GC2145_PID:
+            ESP_LOGI(TAG, "GC2145 camera module detected");
+            break;
         default:
-            ESP_LOGE(TAG, "Camera module is unknown and not properly supported!");
+            ESP_LOGE(TAG, "Camera module is unknown and not properly supported!: 0x%04X", CCstatus.CamSensor_id);
             CCstatus.CameraInitSuccessful = false;
         }
     }
@@ -556,6 +598,19 @@ void CCamera::SetZoomSize(bool zoomEnabled, int zoomOffsetX, int zoomOffsetY, in
                 SetCamWindow(s, frameSizeX, frameSizeY, _offsetx, _offsety, _imageWidth, _imageHeight, CCstatus.ImageWidth, CCstatus.ImageHeight, imageVflip);
                 break;
 
+            // case GC2145_PID:
+            //     frameSizeX = 1600;
+            //     frameSizeY = 1200;
+            //     // max imageSize = ((frameSizeX - CCstatus.ImageWidth) / 8 / 4) -1
+            //     // 29 = ((1600 - 640) / 8 / 4) - 1
+            //     if (imageSize < 29)
+            //     {
+            //         _imageSize_temp = (29 - imageSize);
+            //     }
+            //     SanitizeZoomParams(_imageSize_temp, frameSizeX, frameSizeY, _imageWidth, _imageHeight, _offsetx, _offsety);
+            //     SetCamWindow(s, frameSizeX, frameSizeY, _offsetx, _offsety, _imageWidth, _imageHeight, CCstatus.ImageWidth, CCstatus.ImageHeight, imageVflip);
+            //     break;
+
             default:
                 // do nothing
                 break;
@@ -677,15 +732,39 @@ esp_err_t CCamera::CaptureToBasisImage(CImageBasis *_Image, int delay)
         loadNextDemoImage(fb);
     }
 
+    bool converted = false;
+    uint8_t *buf;
+    size_t buf_len;
+
+    if (fb->format != PIXFORMAT_JPEG)
+    {
+        bool jpeg_converted = frame2jpg(fb, 80, &buf, &buf_len);
+        converted = true;
+        if (!jpeg_converted)
+        {
+            ESP_LOGE(TAG, "JPEG compression failed");
+        }
+    }
+    else
+    {
+        buf_len = fb->len;
+        buf = fb->buf;
+    }
+
     CImageBasis *_zwImage = new CImageBasis("zwImage");
 
     if (_zwImage)
     {
-        _zwImage->LoadFromMemory(fb->buf, fb->len);
+        _zwImage->LoadFromMemory(buf, buf_len);
     }
     else
     {
         LogFile.WriteToFile(ESP_LOG_ERROR, TAG, "CaptureToBasisImage: Can't allocate _zwImage");
+    }
+
+    if (converted)
+    {
+        free(buf);
     }
 
     esp_camera_fb_return(fb);
@@ -960,6 +1039,9 @@ esp_err_t CCamera::CaptureToStream(httpd_req_t *req, bool FlashlightOn)
     httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
 
+    uint8_t *buf;
+    size_t buf_len;
+
     while (1)
     {
         fr_start = esp_timer_get_time();
@@ -973,7 +1055,25 @@ esp_err_t CCamera::CaptureToStream(httpd_req_t *req, bool FlashlightOn)
             break;
         }
 
-        fb_len = fb->len;
+        bool converted = false;
+
+        if (fb->format != PIXFORMAT_JPEG)
+        {
+            bool jpeg_converted = frame2jpg(fb, 80, &buf, &buf_len);
+            converted = true;
+            if (!jpeg_converted)
+            {
+                ESP_LOGE(TAG, "JPEG compression failed");
+            }
+        }
+        else
+        {
+            buf_len = fb->len;
+            buf = fb->buf;
+        }
+
+
+        fb_len = buf_len;
 
         if (res == ESP_OK)
         {
@@ -983,12 +1083,17 @@ esp_err_t CCamera::CaptureToStream(httpd_req_t *req, bool FlashlightOn)
 
         if (res == ESP_OK)
         {
-            res = httpd_resp_send_chunk(req, (const char *)fb->buf, fb_len);
+            res = httpd_resp_send_chunk(req, (const char *)buf, fb_len);
         }
 
         if (res == ESP_OK)
         {
             res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+        }
+
+        if (converted)
+        {
+            free(buf);
         }
 
         esp_camera_fb_return(fb);
