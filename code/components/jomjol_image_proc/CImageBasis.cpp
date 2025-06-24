@@ -445,6 +445,8 @@ void CImageBasis::LoadFromMemory(stbi_uc *_buffer, int len)
 
     rgb_image = stbi_load_from_memory(_buffer, len, &width, &height, &channels, STBI_rgb);
     bpp = channels;
+    
+    LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "Image loaded from memory: " + to_string(width) + ", " + to_string(height) + ", " + to_string(channels));
     ESP_LOGD(TAG, "Image loaded from memory: %d, %d, %d", width, height, channels);
     
     if ((width * height * channels) == 0)
