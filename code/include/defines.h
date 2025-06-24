@@ -122,7 +122,7 @@
 
 
     //ClassFlowControll: Serve alg_roi.jpg from memory as JPG
-    #define ALGROI_LOAD_FROM_MEM_AS_JPG // Load ALG_ROI.JPG as rendered JPG from RAM
+    // #define ALGROI_LOAD_FROM_MEM_AS_JPG // Load ALG_ROI.JPG as rendered JPG from RAM
 
 
     //ClassFlowMQTT

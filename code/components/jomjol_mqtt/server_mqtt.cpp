@@ -88,13 +88,13 @@ bool sendHomeAssistantDiscoveryTopic(std::string group, std::string field,
     */
     std::string node_id = createNodeId(maintopic);
     if (field == "problem") { // Special case: Binary sensor which is based on error topic
-        topicFull = "homeassistant/binary_sensor/" + node_id + "/" + configTopic + "/config";
+        topicFull = "ha_stream/binary_sensor/" + node_id + "/" + configTopic + "/config";
     }
     else if (field == "flowstart") { // Special case: Button
-        topicFull = "homeassistant/button/" + node_id + "/" + configTopic + "/config";
+        topicFull = "ha_stream/button/" + node_id + "/" + configTopic + "/config";
     }
     else {
-        topicFull = "homeassistant/sensor/" + node_id + "/" + configTopic + "/config";
+        topicFull = "ha_stream/sensor/" + node_id + "/" + configTopic + "/config";
     }
 
     /* See https://www.home-assistant.io/docs/mqtt/discovery/ */
